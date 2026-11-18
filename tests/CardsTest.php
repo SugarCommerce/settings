@@ -495,6 +495,48 @@ final class CardsTest extends TestCase {
 	}
 
 	/**
+	 * A section whose fields are all on another tab is drawn there, and not
+	 * a second time, empty, on the first tab as if it only explained.
+	 */
+	public function test_a_section_with_fields_elsewhere_is_not_a_note(): void {
+		$page = $this->page(
+			[
+				'tabs'     => [
+					'one' => 'One',
+					'two' => 'Two',
+				],
+				'sections' => [
+					'account' => [
+						'title'       => 'Account',
+						'description' => 'Who this site signs in as.',
+					],
+				],
+				'fields'   => [
+					'name' => [
+						'type'  => 'text',
+						'label' => 'Name',
+					],
+					'key'  => [
+						'type'    => 'text',
+						'label'   => 'Key',
+						'tab'     => 'two',
+						'section' => 'account',
+					],
+				],
+			]
+		);
+
+		$this->assertStringNotContainsString( 'Who this site signs in as.', $this->render( $page ) );
+
+		$_GET['tab'] = 'two';
+
+		$two = $this->render( $page );
+
+		$this->assertSame( 1, substr_count( $two, 'Who this site signs in as.' ) );
+		$this->assertStringContainsString( 'Key', $two );
+	}
+
+	/**
 	 * The classic table draws one too: its heading and paragraph, and no
 	 * empty table.
 	 */

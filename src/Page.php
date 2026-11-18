@@ -979,7 +979,7 @@ final class Page {
 			// something to say. A card that only explains (where a key is
 			// found, what happens next) is a section with a description and
 			// no fields, and it is drawn on the tab it names.
-			if ( [] === $in_section && ! $this->is_note_on( (array) $section, $tab ) ) {
+			if ( [] === $in_section && ! $this->is_note_on( (string) $slug, (array) $section, $tab ) ) {
 				continue;
 			}
 
@@ -1042,14 +1042,25 @@ final class Page {
 	 * where it goes with `tab`, and is on the first tab when it does not --
 	 * where a field with no tab is.
 	 *
+	 * A section with fields on some other tab is not a note at all. It is
+	 * drawn there, with them; read as a note it was drawn a second time,
+	 * empty, on the first tab.
+	 *
+	 * @param string               $slug    The section's slug.
 	 * @param array<string, mixed> $section The section's configuration.
 	 * @param string               $tab     The tab being drawn.
 	 *
 	 * @return bool
 	 */
-	private function is_note_on( array $section, string $tab ): bool {
+	private function is_note_on( string $slug, array $section, string $tab ): bool {
 		if ( '' === trim( (string) ( $section['description'] ?? '' ) ) ) {
 			return false;
+		}
+
+		foreach ( $this->fields as $field ) {
+			if ( (string) ( $field['section'] ?? '' ) === $slug ) {
+				return false;
+			}
 		}
 
 		if ( [] === $this->tabs ) {
