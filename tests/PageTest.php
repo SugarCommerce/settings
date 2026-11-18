@@ -1,0 +1,1435 @@
+<?php
+/**
+ * Settings page tests.
+ *
+ * @package SugarCommerce\Settings
+ */
+
+declare( strict_types=1 );
+
+namespace SugarCommerce\Settings\Tests;
+
+use SugarCommerce\Fields\Context\EncryptedContext;
+use SugarCommerce\Settings\Page;
+use PHPUnit\Framework\TestCase;
+use SF_Redirect;
+
+/**
+ * The field layer is the kit's and is tested there. What is tested here is
+ * what this library still decides: which fields a submission governs, what
+ * survives a write it did not come from, and what an export is allowed to
+ * contain.
+ */
+final class PageTest extends TestCase {
+
+	/**
+	 * Reset the stubbed globals and the registry.
+	 */
+	protected function setUp(): void {
+		sf_reset_globals();
+
+		$_POST  = [];
+		$_GET   = [];
+		$_FILES = [];
+
+		foreach ( array_keys( Page::all() ) as $id ) {
+			Page::unregister( (string) $id );
+		}
+	}
+
+	/**
+	 * Build a settings page over two tabs.
+	 *
+	 * @param array<string, mixed> $config Configuration overrides.
+	 *
+	 * @return Page
+	 */
+	private function page( array $config = [] ): Page {
+		return new Page(
+			'sf_demo',
+			array_merge(
+				[
+					'option_name' => 'sf_demo',
+					'menu_slug'   => 'sf-demo',
+					'tabs'        => [
+						'one' => 'One',
+						'two' => 'Two',
+					],
+					'fields'      => [
+						'first'  => [
+							'type' => 'text',
+							'tab'  => 'one',
+						],
+						'count'  => [
+							'type' => 'number',
+							'tab'  => 'one',
+							'min'  => 0,
+						],
+						'agreed' => [
+							'type' => 'checkbox',
+							'tab'  => 'one',
+						],
+						'second' => [
+							'type' => 'text',
+							'tab'  => 'two',
+						],
+					],
+				],
+				$config
+			)
+		);
+	}
+
+	/**
+	 * Submit a tab, the way options.php would.
+	 *
+	 * @param Page        $page  The page.
+	 * @param string               $tab   Tab being saved.
+	 * @param array<string, mixed> $input Submitted values, already unslashed.
+	 *
+	 * @return void
+	 */
+	private function submit( Page $page, string $tab, array $input ): void {
+		$_POST[ 'sf_demo_tab' ] = $tab;
+
+		update_option( $page->get_option_name(), $input );
+	}
+
+	/**
+	 * Saving one tab leaves the other tab's values alone.
+	 *
+	 * A submission only carries the fields on the screen it came from, so a
+	 * pass over every field would read the rest as cleared. This is the bug
+	 * a tabbed settings page has if nobody thinks about it, and it presents
+	 * as "my other settings keep disappearing".
+	 */
+	public function test_saving_one_tab_leaves_the_other_alone(): void {
+		$page = $this->page();
+
+		$this->submit( $page, 'two', [ 'second' => 'kept' ] );
+		$this->submit( $page, 'one', [ 'first' => 'set' ] );
+
+		$this->assertSame( 'kept', $page->get_value( 'second' ) );
+		$this->assertSame( 'set', $page->get_value( 'first' ) );
+	}
+
+	/**
+	 * A save keeps the option's keys in the order they are stored in.
+	 *
+	 * update_option() compares the old array with the new before it writes,
+	 * and the comparison is order-sensitive: a save that reordered the keys
+	 * was a write, a cache flush and an updated_option on every save that
+	 * changed nothing.
+	 */
+	public function test_a_save_keeps_the_stored_order(): void {
+		$page = $this->page();
+
+		$GLOBALS['fk_options']['sf_demo'] = [
+			'second' => 'two',
+			'count'  => 3,
+			'first'  => 'one',
+		];
+
+		// A whole-value write, which sanitizes every key it carries afresh
+		// and so builds its answer in the order the fields are configured.
+		update_option( 'sf_demo', $GLOBALS['fk_options']['sf_demo'] );
+
+		$this->assertSame( [ 'second', 'count', 'first' ], array_keys( $page->get_values() ) );
+	}
+
+	/**
+	 * An unticked checkbox stores off rather than reverting to its default.
+	 */
+	public function test_an_unticked_checkbox_stores_off(): void {
+		$page = $this->page(
+			[
+				'fields' => [
+					'agreed' => [
+						'type'    => 'checkbox',
+						'tab'     => 'one',
+						'default' => 1,
+					],
+				],
+			]
+		);
+
+		$this->submit( $page, 'one', [ 'agreed' => '1' ] );
+		$this->assertSame( 1, $page->get_value( 'agreed' ) );
+
+		// Unticked: absent from the submission entirely.
+		$this->submit( $page, 'one', [] );
+
+		$this->assertSame( 0, $page->get_value( 'agreed' ) );
+	}
+
+	/**
+	 * A value is sanitized by its own field type, not stored as sent.
+	 */
+	public function test_a_value_is_sanitized_by_its_type(): void {
+		$page = $this->page();
+
+		$this->submit( $page, 'one', [ 'count' => '42' ] );
+
+		$this->assertSame( 42, $page->get_value( 'count' ) );
+
+		// Not a number at all: the type falls back to its own minimum rather
+		// than storing the string.
+		$this->submit( $page, 'one', [ 'count' => 'not a number' ] );
+
+		$this->assertSame( 0, $page->get_value( 'count' ) );
+	}
+
+	/**
+	 * A backslash a user typed survives the save.
+	 *
+	 * The Settings API unslashes before it hands the value over and the field
+	 * set unslashes again at its own boundary, so without a re-slash between
+	 * them the value is unslashed twice. It presents as a Windows path or a
+	 * regular expression quietly losing its backslashes on every save.
+	 */
+	public function test_a_backslash_survives_the_save(): void {
+		$page = $this->page();
+
+		$this->submit( $page, 'one', [ 'first' => 'C:\\Users\\name' ] );
+
+		$this->assertSame( 'C:\\Users\\name', $page->get_value( 'first' ) );
+	}
+
+	/**
+	 * A field whose condition is not met is deleted rather than kept.
+	 */
+	public function test_a_hidden_conditional_field_is_dropped(): void {
+		$page = $this->page(
+			[
+				'fields' => [
+					'flag'   => [
+						'type' => 'checkbox',
+						'tab'  => 'one',
+					],
+					'detail' => [
+						'type'      => 'text',
+						'tab'       => 'one',
+						'show_when' => [ 'flag' => 1 ],
+					],
+				],
+			]
+		);
+
+		$this->submit(
+			$page,
+			'one',
+			[
+				'flag'   => '1',
+				'detail' => 'visible',
+			]
+		);
+
+		$this->assertSame( 'visible', $page->get_value( 'detail' ) );
+
+		// The script hides the field; nothing stops the browser submitting it.
+		$this->submit( $page, 'one', [ 'detail' => 'stale' ] );
+
+		$this->assertNull( $page->get_value( 'detail' ) );
+	}
+
+	/**
+	 * A key that is not a field on this page cannot be written through it.
+	 */
+	public function test_a_key_that_is_not_a_field_is_not_stored(): void {
+		$page = $this->page();
+
+		$this->submit(
+			$page,
+			'one',
+			[
+				'first'          => 'set',
+				'active_plugins' => [ 'evil/evil.php' ],
+			]
+		);
+
+		$this->assertArrayNotHasKey( 'active_plugins', $page->get_values() );
+	}
+
+	/**
+	 * A write that is not a form submission governs every field.
+	 *
+	 * update_option() replaces a value; it does not merge one. A caller that
+	 * hands over an array without the tab marker means all of it.
+	 */
+	public function test_a_direct_write_governs_every_field(): void {
+		$page = $this->page();
+
+		$this->submit( $page, 'two', [ 'second' => 'kept' ] );
+
+		// No marker: this is not a form submission.
+		$_POST = [];
+
+		update_option( 'sf_demo', [ 'first' => 'only-this' ] );
+
+		$this->assertSame( 'only-this', $page->get_value( 'first' ) );
+		$this->assertNull( $page->get_value( 'second' ) );
+	}
+
+	/**
+	 * A write that is not a submission invents nothing.
+	 *
+	 * A form submission is missing its unticked checkboxes, so absence has to
+	 * mean off there. Nothing about a cron job calling update_option() with
+	 * one key says the same, and reading it that way wrote a 0 for every
+	 * checkbox and number field on the page — found on the live site, where a
+	 * page of 48 fields grew three keys every time anything wrote to it.
+	 */
+	public function test_a_write_that_is_not_a_submission_invents_nothing(): void {
+		$page = $this->page();
+
+		$_POST = [];
+
+		update_option( 'sf_demo', [ 'first' => 'only-this' ] );
+
+		$this->assertSame( [ 'first' => 'only-this' ], $page->get_values() );
+	}
+
+	/**
+	 * A key the option holds that is not a field is left alone.
+	 *
+	 * A filter on another plugin's hook may have put it there, and a write to
+	 * one field is not the place to decide it should not exist.
+	 */
+	public function test_a_stored_key_that_is_not_a_field_survives(): void {
+		$page = $this->page();
+
+		$GLOBALS['fk_options']['sf_demo'] = [ 'set_by_a_filter' => 'kept' ];
+
+		$_POST = [];
+
+		update_option( 'sf_demo', [ 'first' => 'set' ] );
+
+		$this->assertSame(
+			[
+				'set_by_a_filter' => 'kept',
+				'first'           => 'set',
+			],
+			$page->get_values()
+		);
+	}
+
+	/**
+	 * Sanitizing a stored value again changes nothing.
+	 *
+	 * Reset, import and any plugin calling update_option() all hand back what
+	 * they read. update_option() sanitizes before it compares, so every one
+	 * of those re-runs this callback over its own previous output — and a
+	 * pass that is not idempotent corrupts a value simply by being saved
+	 * twice.
+	 */
+	public function test_sanitizing_stored_values_again_changes_nothing(): void {
+		$page = $this->page();
+
+		$this->submit(
+			$page,
+			'one',
+			[
+				'first'  => 'set',
+				'count'  => '7',
+				'agreed' => '1',
+			]
+		);
+
+		$once = $page->get_values();
+
+		$_POST = [];
+		update_option( 'sf_demo', $once );
+
+		$this->assertSame( $once, $page->get_values() );
+	}
+
+	/**
+	 * Re-saving an unchanged value is not reported as a change.
+	 *
+	 * update_option() compares before it writes, and an array comparison is
+	 * order-sensitive. A sanitize pass that returned the same values in a
+	 * different order made every save look like a change: a write, a cache
+	 * invalidation and an updated_option firing each time anything touched
+	 * the option.
+	 */
+	public function test_re_saving_an_unchanged_value_writes_nothing(): void {
+		$page = $this->page();
+
+		$this->submit(
+			$page,
+			'one',
+			[
+				'first' => 'set',
+				'count' => '3',
+			]
+		);
+
+		$stored = $page->get_values();
+		$_POST  = [];
+
+		$this->assertFalse( update_option( 'sf_demo', $stored ) );
+		$this->assertSame( $stored, $page->get_values() );
+	}
+
+	/**
+	 * An encrypted value never reaches storage in the clear.
+	 */
+	public function test_an_encrypted_value_is_not_stored_in_the_clear(): void {
+		if ( ! EncryptedContext::available() ) {
+			$this->markTestSkipped( 'OpenSSL or the salts are unavailable.' );
+		}
+
+		$page = $this->page(
+			[
+				'fields' => [
+					'api_key' => [
+						'type'      => 'text',
+						'tab'       => 'one',
+						'encrypted' => true,
+					],
+				],
+			]
+		);
+
+		$this->submit( $page, 'one', [ 'api_key' => 'sk-live-DO-NOT-LEAK' ] );
+
+		$this->assertStringNotContainsString( 'sk-live-DO-NOT-LEAK', (string) wp_json_encode( $page->get_values() ) );
+		$this->assertSame( 'sk-live-DO-NOT-LEAK', $page->get_value( 'api_key' ) );
+	}
+
+	/**
+	 * Saving again does not destroy an encrypted value.
+	 *
+	 * The stored form is ciphertext, and a whole-value write hands that
+	 * ciphertext back. Encrypting it a second time leaves a value that
+	 * decrypts to a `fkenc:` string, which is how a working licence key
+	 * becomes nonsense on an unrelated save.
+	 */
+	public function test_an_encrypted_value_survives_a_whole_value_write(): void {
+		if ( ! EncryptedContext::available() ) {
+			$this->markTestSkipped( 'OpenSSL or the salts are unavailable.' );
+		}
+
+		$page = $this->page(
+			[
+				'fields' => [
+					'api_key' => [
+						'type'      => 'text',
+						'tab'       => 'one',
+						'encrypted' => true,
+					],
+				],
+			]
+		);
+
+		$this->submit( $page, 'one', [ 'api_key' => 'sk-live-DO-NOT-LEAK' ] );
+
+		$_POST = [];
+		update_option( 'sf_demo', $page->get_values() );
+
+		$this->assertSame( 'sk-live-DO-NOT-LEAK', $page->get_value( 'api_key' ) );
+	}
+
+	/**
+	 * An export leaves encrypted values out.
+	 */
+	public function test_an_export_omits_encrypted_values(): void {
+		if ( ! EncryptedContext::available() ) {
+			$this->markTestSkipped( 'OpenSSL or the salts are unavailable.' );
+		}
+
+		$page = $this->page(
+			[
+				'fields' => [
+					'first'   => [
+						'type' => 'text',
+						'tab'  => 'one',
+					],
+					'api_key' => [
+						'type'      => 'text',
+						'tab'       => 'one',
+						'encrypted' => true,
+					],
+				],
+			]
+		);
+
+		$this->submit(
+			$page,
+			'one',
+			[
+				'first'   => 'exported',
+				'api_key' => 'sk-live-DO-NOT-LEAK',
+			]
+		);
+
+		$payload = $page->export_payload();
+
+		$this->assertSame( 'sf_demo', $payload['id'] );
+		$this->assertSame( [ 'first' => 'exported' ], $payload['values'] );
+	}
+
+	/**
+	 * An import file from another page is refused.
+	 */
+	public function test_an_import_from_another_page_is_refused(): void {
+		$page = $this->page();
+
+		$this->submit( $page, 'one', [ 'first' => 'original' ] );
+
+		$this->import( [ 'id' => 'somewhere_else', 'values' => [ 'first' => 'overwritten' ] ] );
+
+		$this->assertSame( 'original', $page->get_value( 'first' ) );
+		$this->assertSame( 'import_failed', $GLOBALS['sf_errors'][0]['code'] );
+	}
+
+	/**
+	 * An imported value is sanitized by its own field type.
+	 */
+	public function test_imported_values_are_sanitized(): void {
+		$page = $this->page();
+
+		$this->import(
+			[
+				'id'     => 'sf_demo',
+				'values' => [
+					'count'          => '9',
+					'active_plugins' => [ 'evil/evil.php' ],
+				],
+			]
+		);
+
+		$this->assertSame( 9, $page->get_value( 'count' ) );
+		$this->assertArrayNotHasKey( 'active_plugins', $page->get_values() );
+	}
+
+	/**
+	 * A reset clears the tab it was asked for and no other.
+	 */
+	public function test_a_reset_clears_only_the_tab_it_was_asked_for(): void {
+		$page = $this->page( [ 'reset_button' => true ] );
+
+		$this->submit( $page, 'one', [ 'first' => 'gone' ] );
+		$this->submit( $page, 'two', [ 'second' => 'kept' ] );
+
+		$_POST = [ 'tab' => 'one' ];
+
+		try {
+			$page->handle_reset();
+			$this->fail( 'handle_reset() should have redirected.' );
+		} catch ( SF_Redirect $redirect ) {
+			$this->assertStringContainsString( 'tab=one', $redirect->location );
+		}
+
+		$this->assertNull( $page->get_value( 'first' ) );
+		$this->assertSame( 'kept', $page->get_value( 'second' ) );
+	}
+
+	/**
+	 * A reset restores a field's configured default rather than emptying it.
+	 */
+	public function test_a_reset_restores_the_default(): void {
+		$page = $this->page(
+			[
+				'fields' => [
+					'first' => [
+						'type'    => 'text',
+						'tab'     => 'one',
+						'default' => 'the-default',
+					],
+				],
+			]
+		);
+
+		$this->submit( $page, 'one', [ 'first' => 'changed' ] );
+		$this->assertSame( 'changed', $page->get_value( 'first' ) );
+
+		$_POST = [ 'tab' => 'one' ];
+
+		try {
+			$page->handle_reset();
+		} catch ( SF_Redirect $redirect ) {
+			unset( $redirect );
+		}
+
+		$this->assertSame( 'the-default', $page->get_value( 'first' ) );
+	}
+
+	/**
+	 * A page under a parent registers as a submenu, and one without does not.
+	 */
+	public function test_the_menu_matches_the_parent_it_was_given(): void {
+		$this->page( [ 'parent_slug' => 'options-general.php' ] )->register_menu();
+
+		$this->assertSame( 'options-general.php', $GLOBALS['sf_menus'][0]['parent'] );
+
+		$GLOBALS['sf_menus'] = [];
+
+		$this->page()->register_menu();
+
+		$this->assertSame( '', $GLOBALS['sf_menus'][0]['parent'] );
+	}
+
+	/**
+	 * The page renders a row for every field on the tab, and none for the rest.
+	 */
+	public function test_the_page_renders_only_the_current_tab(): void {
+		$page = $this->page();
+
+		$_GET['tab'] = 'two';
+
+		$html = $this->render( $page );
+
+		$this->assertStringContainsString( 'name="sf_demo[second]"', $html );
+		$this->assertStringNotContainsString( 'name="sf_demo[first]"', $html );
+	}
+
+	/**
+	 * The header is core's own, and carries the marker notices are moved to.
+	 */
+	public function test_the_page_renders_the_core_header(): void {
+		$html = $this->render( $this->page() );
+
+		$this->assertStringContainsString( 'privacy-settings-header', $html );
+		$this->assertStringContainsString( '<hr class="wp-header-end">', $html );
+		$this->assertStringContainsString( 'aria-current="true"', $html );
+	}
+
+	/**
+	 * A logo and a badge reach the header.
+	 *
+	 * The port to core's header dropped both, which is a real loss for a
+	 * commercial plugin and exactly the kind of thing a rewrite loses
+	 * silently.
+	 */
+	public function test_the_header_carries_the_branding(): void {
+		$html = $this->render(
+			$this->page(
+				[
+					'header_title' => 'My Plugin',
+					'logo'         => 'https://example.test/logo.svg',
+					'badge'        => 'v2.1.0',
+				]
+			)
+		);
+
+		$this->assertStringContainsString( '<h1>My Plugin</h1>', $html );
+		$this->assertStringContainsString( 'https://example.test/logo.svg', $html );
+		$this->assertStringContainsString( '>v2.1.0</span>', $html );
+	}
+
+	/**
+	 * With no header title, the page title is used.
+	 */
+	public function test_the_header_falls_back_to_the_page_title(): void {
+		$html = $this->render( $this->page( [ 'page_title' => 'Fallback Title' ] ) );
+
+		$this->assertStringContainsString( '<h1>Fallback Title</h1>', $html );
+	}
+
+	/**
+	 * The submitted tab travels with the form.
+	 *
+	 * Without it the sanitize pass cannot tell a one-tab submission from a
+	 * write of the whole value, and every other tab is cleared on save.
+	 */
+	public function test_the_form_carries_the_tab_it_is_saving(): void {
+		$_GET['tab'] = 'two';
+
+		$this->assertStringContainsString(
+			'name="sf_demo_tab" value="two"',
+			$this->render( $this->page() )
+		);
+	}
+
+	/**
+	 * A badged section badges and locks every field in it.
+	 *
+	 * Locking a section only visually would be worse than not locking it: a
+	 * disabled control sends nothing, so the next save would read every field
+	 * in the section as cleared and wipe values the install had configured
+	 * while it still had the feature.
+	 */
+	public function test_a_badged_section_locks_its_fields(): void {
+		$page = $this->page(
+			[
+				'sections' => [
+					'premium' => [
+						'title' => 'Premium',
+						'tab'   => 'one',
+						'badge' => 'Pro',
+					],
+				],
+				'fields'   => [
+					'locked' => [
+						'type'    => 'text',
+						'tab'     => 'one',
+						'section' => 'premium',
+					],
+					'free'   => [
+						'type' => 'text',
+						'tab'  => 'one',
+					],
+				],
+			]
+		);
+
+		$html = $this->render( $page );
+
+		// Once in the section heading, once in the locked field's own header
+		// cell — and not against the side of the input, which is where it
+		// first went.
+		$this->assertSame( 2, substr_count( $html, 'field-kit__badge' ) );
+		$this->assertStringContainsString( 'field-kit__field--locked', $html );
+		$this->assertMatchesRegularExpression(
+			'/<th scope="row">.*field-kit__badge.*<\/th>/s',
+			$html
+		);
+
+		// And its stored value survives a save that cannot include it.
+		$GLOBALS['fk_options']['sf_demo'] = [ 'locked' => 'set-while-licensed' ];
+
+		$this->submit( $page, 'one', [ 'free' => 'y' ] );
+
+		$this->assertSame( 'set-while-licensed', $page->get_value( 'locked' ) );
+		$this->assertSame( 'y', $page->get_value( 'free' ) );
+	}
+
+	/**
+	 * A field's own badge wins over its section's.
+	 */
+	public function test_a_field_badge_beats_its_sections(): void {
+		$page = $this->page(
+			[
+				'sections' => [
+					'premium' => [
+						'title' => 'Premium',
+						'tab'   => 'one',
+						'badge' => 'Pro',
+					],
+				],
+				'fields'   => [
+					'specific' => [
+						'type'    => 'text',
+						'tab'     => 'one',
+						'section' => 'premium',
+						'badge'   => 'Business',
+					],
+				],
+			]
+		);
+
+		$this->assertStringContainsString( '>Business<', $this->render( $page ) );
+	}
+
+	/**
+	 * A suppressed section badge locks nothing.
+	 */
+	public function test_a_suppressed_section_badge_locks_nothing(): void {
+		$page = $this->page(
+			[
+				'sections' => [
+					'premium' => [
+						'title' => 'Premium',
+						'tab'   => 'one',
+						'badge' => [
+							'text'     => 'Pro',
+							'disabled' => true,
+						],
+					],
+				],
+				'fields'   => [
+					'field' => [
+						'type'    => 'text',
+						'tab'     => 'one',
+						'section' => 'premium',
+					],
+				],
+			]
+		);
+
+		$html = $this->render( $page );
+
+		$this->assertStringNotContainsString( 'field-kit__badge', $html );
+		$this->assertStringNotContainsString( 'field-kit__field--locked', $html );
+	}
+
+	/**
+	 * A field with no section still appears.
+	 */
+	public function test_a_field_no_section_claimed_still_renders(): void {
+		$page = $this->page(
+			[
+				'sections' => [
+					'text' => [
+						'title' => 'Text',
+						'tab'   => 'one',
+					],
+				],
+				'fields'   => [
+					'first'   => [
+						'type'    => 'text',
+						'tab'     => 'one',
+						'section' => 'text',
+					],
+					'orphan'  => [
+						'type'    => 'text',
+						'tab'     => 'one',
+						'section' => 'typo',
+					],
+					'no_name' => [
+						'type' => 'text',
+						'tab'  => 'one',
+					],
+				],
+			]
+		);
+
+		$html = $this->render( $page );
+
+		$this->assertStringContainsString( 'name="sf_demo[first]"', $html );
+		$this->assertStringContainsString( 'name="sf_demo[orphan]"', $html );
+		$this->assertStringContainsString( 'name="sf_demo[no_name]"', $html );
+	}
+
+	/**
+	 * A layout field spans the row rather than being labelled as a control.
+	 */
+	public function test_a_layout_field_spans_the_row(): void {
+		$page = $this->page(
+			[
+				'fields' => [
+					'intro' => [
+						'type'  => 'heading',
+						'tab'   => 'one',
+						'label' => 'Section heading',
+					],
+				],
+			]
+		);
+
+		$html = $this->render( $page );
+
+		$this->assertStringContainsString( '<td colspan="2">', $html );
+		$this->assertStringNotContainsString( '<th scope="row">', $html );
+	}
+
+	/**
+	 * The header renders outside .wrap.
+	 *
+	 * Inside it, .wrap's own margins inset the header and it stops looking
+	 * like core's — which is the entire reason for using core's markup.
+	 * options-privacy.php renders it at the top level, before any wrapper.
+	 */
+	public function test_the_header_renders_outside_the_wrap(): void {
+		$html = $this->render( $this->page() );
+
+		$header = strpos( $html, 'privacy-settings-header' );
+		$wrap   = strpos( $html, 'class="wrap' );
+
+		$this->assertIsInt( $header );
+		$this->assertIsInt( $wrap );
+		$this->assertLessThan( $wrap, $header, 'The header must come before .wrap opens.' );
+		$this->assertLessThan( $wrap, strpos( $html, 'wp-header-end' ) );
+	}
+
+	/**
+	 * The screen carries the body class the header's rule keys on.
+	 *
+	 * Without it #wpcontent keeps its 20px left padding and the header sits
+	 * inset from the menu instead of spanning the screen.
+	 */
+	public function test_the_screen_carries_the_header_body_class(): void {
+		$page = $this->page();
+		$page->register_menu();
+
+		$GLOBALS['sf_screen'] = new \SF_Screen( $page->get_hook_suffix() );
+
+		$this->assertStringContainsString(
+			\SugarCommerce\Fields\Support\PageHeader::body_class(),
+			$page->body_class( 'existing-class' )
+		);
+
+		// And another screen is left exactly as it was.
+		$GLOBALS['sf_screen'] = new \SF_Screen( 'edit-post' );
+
+		$this->assertSame( 'existing-class', $page->body_class( 'existing-class' ) );
+	}
+
+	/**
+	 * The tools are not in the header.
+	 *
+	 * A file input and three buttons across a centred page title looked
+	 * exactly as bad as it sounds.
+	 */
+	public function test_the_header_carries_no_action_buttons(): void {
+		$html = $this->render(
+			$this->page(
+				[
+					'export_import' => true,
+					'reset_button'  => true,
+				]
+			)
+		);
+
+		$this->assertStringNotContainsString( 'field-kit__page-actions', $html );
+		$this->assertStringNotContainsString( 'admin-post.php', $html );
+	}
+
+	/**
+	 * The tools render into the Screen Options panel.
+	 */
+	public function test_the_tools_render_into_screen_options(): void {
+		$page = $this->page(
+			[
+				'export_import' => true,
+				'reset_button'  => true,
+			]
+		);
+
+		$page->register_menu();
+
+		$panel = $page->render_screen_tools( '', new \SF_Screen( $page->get_hook_suffix() ) );
+
+		$this->assertStringContainsString( 'field-kit__screen-tools', $panel );
+		$this->assertStringContainsString( 'sf_demo_export', $panel );
+		$this->assertStringContainsString( 'sf_demo_import', $panel );
+		$this->assertStringContainsString( 'sf_demo_reset', $panel );
+		$this->assertStringContainsString( 'type="file"', $panel );
+
+		// A form, not a link: these change state, and a link that changes
+		// state can be followed by a prefetch or a crawler.
+		$this->assertStringContainsString( '<form method="post"', $panel );
+		$this->assertStringContainsString( 'name="_wpnonce"', $panel );
+	}
+
+	/**
+	 * Another screen's Screen Options panel is left alone.
+	 */
+	public function test_the_tools_do_not_leak_onto_other_screens(): void {
+		$page = $this->page( [ 'export_import' => true ] );
+
+		$page->register_menu();
+
+		$this->assertSame( 'existing', $page->render_screen_tools( 'existing', new \SF_Screen( 'edit-post' ) ) );
+	}
+
+	/**
+	 * With neither tool enabled, nothing is added to the panel.
+	 */
+	public function test_no_tools_means_no_panel(): void {
+		$page = $this->page();
+
+		$page->register_menu();
+
+		$this->assertSame( '', $page->render_screen_tools( '', new \SF_Screen( $page->get_hook_suffix() ) ) );
+	}
+
+	/**
+	 * Help tabs and the help sidebar reach the screen.
+	 */
+	public function test_help_tabs_are_registered(): void {
+		$page = $this->page(
+			[
+				'help_tabs'    => [
+					'overview' => [
+						'title'   => 'Overview',
+						'content' => '<p>What this page does.</p>',
+					],
+					'fields'   => [
+						'title'   => 'Fields',
+						'content' => '<p>What each field means.</p>',
+					],
+				],
+				'help_sidebar' => '<p>More help.</p>',
+			]
+		);
+
+		$GLOBALS['sf_screen'] = new \SF_Screen( 'settings_page_sf-demo' );
+
+		$page->register_help_tabs();
+
+		$this->assertCount( 2, $GLOBALS['sf_screen']->help_tabs );
+		$this->assertSame( 'overview', $GLOBALS['sf_screen']->help_tabs[0]['id'] );
+		$this->assertSame( 'Fields', $GLOBALS['sf_screen']->help_tabs[1]['title'] );
+		$this->assertSame( '<p>More help.</p>', $GLOBALS['sf_screen']->help_sidebar );
+	}
+
+	/**
+	 * Help tabs are only hooked when there are some.
+	 */
+	public function test_no_help_tabs_means_no_hook(): void {
+		$plain = $this->page();
+		$plain->register_menu();
+
+		$hook = 'load-' . $plain->get_hook_suffix();
+
+		$this->assertArrayNotHasKey( $hook, $GLOBALS['fk_actions'] );
+
+		$helped = $this->page( [ 'help_tabs' => [ 'a' => [ 'title' => 'A' ] ] ] );
+		$helped->register_menu();
+
+		$this->assertArrayHasKey( 'load-' . $helped->get_hook_suffix(), $GLOBALS['fk_actions'] );
+	}
+
+	/**
+	 * Registering help tabs with no screen does nothing rather than fataling.
+	 */
+	public function test_help_tabs_without_a_screen_are_skipped(): void {
+		unset( $GLOBALS['sf_screen'] );
+
+		$page = $this->page( [ 'help_tabs' => [ 'a' => [ 'title' => 'A' ] ] ] );
+
+		$page->register_help_tabs();
+
+		$this->assertTrue( true );
+	}
+
+	/**
+	 * The capability the page declares is the one options.php checks.
+	 *
+	 * The declared capability gates the menu, the render and the admin-post
+	 * handlers, but options.php does its own check — against
+	 * `option_page_capability_{$option_group}`, falling back to
+	 * manage_options — before it saves. A page registered for a lower
+	 * capability drew for its users and then refused every save with "Sorry,
+	 * you are not allowed to manage options."
+	 */
+	public function test_the_declared_capability_reaches_options_php(): void {
+		$this->page( [ 'capability' => 'edit_posts' ] );
+
+		$this->assertSame(
+			'edit_posts',
+			apply_filters( 'option_page_capability_sf_demo_group', 'manage_options' )
+		);
+	}
+
+	/**
+	 * Two sections with tabs on one tab of the page get their own ids.
+	 *
+	 * The tab strips were scoped by how many fields the section had, so two
+	 * sections with the same number of fields got the same ids, and the
+	 * second strip drove the first one's panels.
+	 */
+	public function test_two_sections_with_tabs_get_their_own_ids(): void {
+		$page = $this->page(
+			[
+				'sections' => [
+					'first'  => [
+						'title' => 'First',
+						'tab'   => 'one',
+					],
+					'second' => [
+						'title' => 'Second',
+						'tab'   => 'one',
+					],
+				],
+				'fields'   => [
+					'a_tab'   => [
+						'type'    => 'tab',
+						'label'   => 'A',
+						'tab'     => 'one',
+						'section' => 'first',
+					],
+					'a_field' => [
+						'type'    => 'text',
+						'tab'     => 'one',
+						'section' => 'first',
+					],
+					'b_tab'   => [
+						'type'    => 'tab',
+						'label'   => 'B',
+						'tab'     => 'one',
+						'section' => 'second',
+					],
+					'b_field' => [
+						'type'    => 'text',
+						'tab'     => 'one',
+						'section' => 'second',
+					],
+				],
+			]
+		);
+
+		preg_match_all( '/\sid="([^"]+)"/', $this->render( $page ), $found );
+
+		$ids = $found[1];
+
+		$this->assertNotEmpty( $ids );
+		$this->assertSame(
+			[],
+			array_values( array_diff_assoc( $ids, array_unique( $ids ) ) ),
+			'An id appears more than once.'
+		);
+	}
+
+	/**
+	 * A user without the capability is refused, not shown the page.
+	 */
+	public function test_a_user_without_the_capability_is_refused(): void {
+		$GLOBALS['fk_can'] = false;
+
+		$this->expectException( \RuntimeException::class );
+
+		$this->render( $this->page() );
+	}
+
+	/**
+	 * The helper functions read through the registry.
+	 */
+	public function test_the_helper_functions_read_the_registered_page(): void {
+		$page = $this->page();
+
+		$this->submit( $page, 'one', [ 'first' => 'via-helper' ] );
+
+		$this->assertSame( $page, Page::get( 'sf_demo' ) );
+		$this->assertSame( 'via-helper', Page::options( 'sf_demo' )->get( 'first' ) );
+		$this->assertSame( 'fallback', Page::options( 'sf_demo' )->get( 'missing', 'fallback' ) );
+		$this->assertSame( $page->get_values(), Page::options( 'sf_demo' )->all() );
+	}
+
+	/**
+	 * A helper write goes through the same gate as the form.
+	 */
+	public function test_a_helper_write_is_sanitized_too(): void {
+		$page = $this->page();
+
+		Page::options( 'sf_demo' )->update( 'count', '13' );
+
+		$this->assertSame( 13, $page->get_value( 'count' ) );
+
+		// And a value its type cannot accept does not get stored as sent.
+		Page::options( 'sf_demo' )->update( 'count', 'thirteen' );
+
+		$this->assertSame( 0, $page->get_value( 'count' ) );
+	}
+
+	/**
+	 * The email bridge hands wp-register-emails what it reads.
+	 *
+	 * The editor stores `recipient`, `subject`, `heading` and `body`;
+	 * compose() reads `to`, `subject`, `content` and `context`. The bridge
+	 * used to read a `message` the editor never stored and return a `title`
+	 * nothing consumed, so an owner's edited heading and body were quietly
+	 * thrown away and the plugin's defaults went out instead.
+	 */
+	public function test_the_email_bridge_speaks_the_shape_compose_reads(): void {
+		$page = $this->page(
+			[
+				'fields' => [
+					'receipt' => [
+						'type'      => 'email_editor',
+						'tab'       => 'one',
+						'recipient' => true,
+						'heading'   => true,
+					],
+				],
+			]
+		);
+
+		$this->submit(
+			$page,
+			'one',
+			[
+				'receipt' => [
+					'recipient' => 'owner@example.test, accounts@example.test',
+					'subject'   => 'Order {order_id}',
+					'heading'   => 'Thanks, {customer_name}',
+					'body'      => 'We are packing it now.',
+				],
+			]
+		);
+
+		$this->assertSame(
+			[
+				'to'      => [ 'owner@example.test', 'accounts@example.test' ],
+				'subject' => 'Order {order_id}',
+				'content' => '<p>We are packing it now.</p>',
+				'context' => [ 'title' => 'Thanks, {customer_name}' ],
+			],
+			Page::options( 'sf_demo' )->email( 'receipt' )
+		);
+
+		// A part left empty is left out, so the registered default stands.
+		$this->submit( $page, 'one', [ 'receipt' => [ 'subject' => 'Only this' ] ] );
+
+		$this->assertSame( [ 'subject' => 'Only this' ], Page::options( 'sf_demo' )->email( 'receipt' ) );
+	}
+
+	/**
+	 * A required field left empty is refused, and keeps what it held.
+	 *
+	 * `required` used to be an HTML attribute and nothing more: a crafted
+	 * request walked past it and the stored value was deleted. The set now
+	 * refuses it, and this library's part is to say so through the Settings
+	 * API — under the option name, keyed by the field — where options.php
+	 * will find it.
+	 */
+	public function test_a_required_field_left_empty_is_refused_and_kept(): void {
+		$page = $this->validated_page();
+
+		$this->submit( $page, 'one', [ 'first' => 'kept' ] );
+		$this->submit( $page, 'one', [ 'first' => '' ] );
+
+		$this->assertSame( 'kept', $page->get_value( 'first' ) );
+		$this->assertSame(
+			[
+				[
+					'setting' => 'sf_demo',
+					'code'    => 'first',
+					'message' => 'First is required.',
+					'type'    => 'error',
+				],
+			],
+			get_settings_errors( 'sf_demo' )
+		);
+	}
+
+	/**
+	 * After the redirect, the refused field is marked and explained.
+	 *
+	 * The set that refused it belonged to the request that saved.
+	 * options.php stored what was registered in a transient and redirected,
+	 * so the page has to read it back through the Settings API and hand the
+	 * message to the field — which is the difference between a notice at
+	 * the top and a field the user can find.
+	 */
+	public function test_the_page_marks_the_refused_field_after_the_redirect(): void {
+		$page = $this->validated_page();
+
+		$this->submit( $page, 'one', [ 'first' => '' ] );
+		$this->redirect_back();
+
+		$html = $this->render( $page );
+
+		// Once in the notice at the top, once under the field.
+		$this->assertSame( 2, substr_count( $html, 'First is required.' ) );
+		$this->assertStringContainsString( 'notice-error', $html );
+		$this->assertStringContainsString( 'field-kit__error', $html );
+		$this->assertStringContainsString( 'aria-invalid="true"', $html );
+
+		// And not announced as saved: core adds that only when nothing was
+		// registered, which is what registering the error is for.
+		$this->assertStringNotContainsString( 'Settings saved.', $html );
+	}
+
+	/**
+	 * A save that refuses nothing is still announced as saved.
+	 */
+	public function test_a_clean_save_is_announced_as_saved(): void {
+		$page = $this->validated_page();
+
+		$this->submit(
+			$page,
+			'one',
+			[
+				'first'   => 'fine',
+				'contact' => 'dev@example.test',
+			]
+		);
+		$this->redirect_back();
+
+		$html = $this->render( $page );
+
+		$this->assertStringContainsString( 'Settings saved.', $html );
+		$this->assertStringNotContainsString( 'field-kit__error', $html );
+	}
+
+	/**
+	 * A refused value in a write that is not a submission is kept too.
+	 *
+	 * A form save seeds the collector with everything stored, so the set
+	 * leaving a failing field alone is enough. A whole-value write seeds no
+	 * field at all, and the value has to be put back by hand — or a plugin
+	 * calling update_option() with one bad address would drop the good one.
+	 */
+	public function test_a_refused_value_survives_a_whole_value_write(): void {
+		$page = $this->validated_page();
+
+		$this->submit(
+			$page,
+			'one',
+			[
+				'first'   => 'kept',
+				'contact' => 'dev@example.test',
+			]
+		);
+
+		$_POST = [];
+
+		update_option(
+			'sf_demo',
+			[
+				'first'   => 'changed',
+				'contact' => 'not-an-address',
+			]
+		);
+
+		$this->assertSame( 'changed', $page->get_value( 'first' ) );
+		$this->assertSame( 'dev@example.test', $page->get_value( 'contact' ) );
+		$this->assertSame( 'contact', get_settings_errors( 'sf_demo' )[0]['code'] );
+	}
+
+	/**
+	 * A page with a required field and a validated one.
+	 *
+	 * @return Page
+	 */
+	private function validated_page(): Page {
+		return $this->page(
+			[
+				'fields' => [
+					'first'   => [
+						'type'     => 'text',
+						'label'    => 'First',
+						'tab'      => 'one',
+						'required' => true,
+					],
+					'contact' => [
+						'type'     => 'text',
+						'label'    => 'Contact',
+						'tab'      => 'one',
+						'validate' => 'email',
+					],
+				],
+			]
+		);
+	}
+
+	/**
+	 * What options.php does once every option is updated, then the next load.
+	 *
+	 * Modelled rather than stubbed because the decision is core's and the
+	 * point is to pin what this library feeds it: "Settings saved." is added
+	 * only when nothing has been registered, and everything registered rides
+	 * the transient to the load that follows, which carries settings-updated.
+	 *
+	 * @return void
+	 */
+	private function redirect_back(): void {
+		if ( ! count( get_settings_errors() ) ) {
+			add_settings_error( 'general', 'settings_updated', 'Settings saved.', 'success' );
+		}
+
+		set_transient( 'settings_errors', get_settings_errors(), 30 );
+
+		// The next request: a fresh global, and the argument the redirect carries.
+		$GLOBALS['sf_errors']     = [];
+		$_GET['settings-updated'] = 'true';
+	}
+
+	/**
+	 * Render the page and return what it printed.
+	 *
+	 * @param Page $page The page.
+	 *
+	 * @return string
+	 */
+	private function render( Page $page ): string {
+		ob_start();
+
+		try {
+			$page->render_page();
+		} finally {
+			$html = (string) ob_get_clean();
+		}
+
+		return $html;
+	}
+
+	/**
+	 * Run an import of a decoded payload.
+	 *
+	 * @param array<string, mixed> $payload What the file contains.
+	 *
+	 * @return void
+	 */
+	private function import( array $payload ): void {
+		// The decoded payload rather than an uploaded file: handle_import()
+		// checks is_uploaded_file(), which is true of nothing a test can
+		// create, and every decision worth asserting on is past that point.
+		try {
+			Page::get( 'sf_demo' )->apply_import(
+				json_decode( (string) wp_json_encode( $payload ), true )
+			);
+		} catch ( SF_Redirect $redirect ) {
+			unset( $redirect );
+		}
+	}
+
+	/**
+	 * The type helpers read through the page and answer through the kit.
+	 *
+	 * They used to hold their own idea of what "on" means. Four libraries
+	 * were on their way to four of those, so the answer moved to the kit and
+	 * these became the reading half — which is the half that is about
+	 * settings.
+	 */
+	public function test_the_type_helpers_delegate(): void {
+		$page = $this->page(
+			[
+				'fields' => [
+					'flag'     => [ 'type' => 'toggle' ],
+					'features' => [
+						'type'    => 'checkbox_group',
+						'options' => [ 'a' => 'A', 'b' => 'B' ],
+					],
+				],
+			]
+		);
+
+		update_option( $page->get_option_name(), [ 'flag' => '1', 'features' => [ 'a' ] ] );
+
+		$this->assertTrue( Page::options( $page->get_id() )->is_on( 'flag' ) );
+		$this->assertTrue( Page::options( $page->get_id() )->includes( 'features', 'a' ) );
+		$this->assertFalse( Page::options( $page->get_id() )->includes( 'features', 'b' ) );
+
+		// The case a plain (bool) cast gets backwards.
+		update_option( $page->get_option_name(), [ 'flag' => '0' ] );
+		$this->assertFalse( Page::options( $page->get_id() )->is_on( 'flag' ) );
+	}
+
+	/**
+	 * A required field says so in the heading this class draws.
+	 */
+	public function test_a_required_field_is_marked_in_its_heading(): void {
+		$page = $this->page(
+			[
+				'fields' => [
+					'store_name' => [ 'type' => 'text', 'label' => 'Store name', 'required' => true ],
+					'tagline'    => [ 'type' => 'text', 'label' => 'Tagline' ],
+				],
+			]
+		);
+
+		ob_start();
+		$page->render_page();
+		$html = (string) ob_get_clean();
+
+		$this->assertMatchesRegularExpression( '/<label for="[^"]*store_name[^"]*">Store name<span class="field-kit__required" aria-hidden="true">\*<\/span>/', $html );
+		$this->assertDoesNotMatchRegularExpression( '/Tagline<span class="field-kit__required"/', $html );
+	}
+
+	/**
+	 * Under the Settings menu core prints the notices; printing them here as
+	 * well said "Settings saved." twice.
+	 */
+	public function test_notices_are_not_printed_twice_under_the_settings_menu(): void {
+		$GLOBALS['sf_settings_errors_calls'] = 0;
+
+		$page = $this->page( [ 'parent_slug' => 'options-general.php' ] );
+		ob_start();
+		$page->render_page();
+		ob_end_clean();
+
+		$this->assertSame( 0, $GLOBALS['sf_settings_errors_calls'] );
+
+		$page = $this->page( [ 'parent_slug' => '' ] );
+		ob_start();
+		$page->render_page();
+		ob_end_clean();
+
+		$this->assertSame( 1, $GLOBALS['sf_settings_errors_calls'] );
+	}
+
+}
