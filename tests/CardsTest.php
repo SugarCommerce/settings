@@ -537,6 +537,69 @@ final class CardsTest extends TestCase {
 	}
 
 	/**
+	 * The Save button is only where there is something to save: not on a
+	 * tab of previews, nor on one whose every control is read-only,
+	 * disabled or locked. On either appearance.
+	 */
+	public function test_a_tab_with_nothing_to_save_has_no_save_button(): void {
+		$config = [
+			'tabs'     => [
+				'one'     => 'One',
+				'preview' => 'Preview',
+				'status'  => 'Status',
+			],
+			'sections' => [],
+			'fields'   => [
+				'name'   => [
+					'type'  => 'text',
+					'label' => 'Name',
+				],
+				'look'   => [
+					'type' => 'html',
+					'html' => '<p>A preview.</p>',
+					'tab'  => 'preview',
+				],
+				'key'    => [
+					'type'     => 'text',
+					'label'    => 'Key',
+					'tab'      => 'status',
+					'readonly' => true,
+				],
+				'region' => [
+					'type'     => 'text',
+					'label'    => 'Region',
+					'tab'      => 'status',
+					'disabled' => true,
+				],
+				'extra'  => [
+					'type'  => 'text',
+					'label' => 'Extra',
+					'tab'   => 'status',
+					'badge' => 'pro',
+				],
+			],
+		];
+
+		foreach ( [ 'modern' => 'field-kit__settings-savebar', 'classic' => 'Save Changes' ] as $appearance => $button ) {
+			$page = $this->page( [ 'appearance' => $appearance ] + $config );
+
+			unset( $_GET['tab'] );
+			$this->assertStringContainsString( $button, $this->render( $page ), $appearance . ': a tab with a field to save' );
+
+			$_GET['tab'] = 'preview';
+			$this->assertStringNotContainsString( $button, $this->render( $page ), $appearance . ': a tab of previews' );
+
+			$_GET['tab'] = 'status';
+			$html        = $this->render( $page );
+
+			$this->assertStringContainsString( 'Key', $html );
+			$this->assertStringNotContainsString( $button, $html, $appearance . ': a read-only tab' );
+
+			Page::unregister( 'sf_demo' );
+		}
+	}
+
+	/**
 	 * The classic table draws one too: its heading and paragraph, and no
 	 * empty table.
 	 */

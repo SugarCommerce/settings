@@ -918,7 +918,10 @@ final class Page {
 
 		$this->render_sections( $tab, $this->field_errors() );
 
-		if ( $this->config['submit_button'] ) {
+		// A button over a tab with nothing it could save -- previews, a log,
+		// figures to read -- says there is something to save, and on a
+		// modern page it is a bar floating over the content as well.
+		if ( $this->config['submit_button'] && self::saves( $this->set( $tab ) ) ) {
 			if ( $this->is_modern() ) {
 				echo Cards::save_bar( $saved ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped as it is built.
 			} else {
@@ -927,6 +930,27 @@ final class Page {
 		}
 
 		echo '</form>';
+	}
+
+	/**
+	 * Whether a set holds a field that a save would write.
+	 *
+	 * The save's own reading (FieldSet's): a type that stores a value, and
+	 * not disabled or locked, which send nothing. A read-only control is
+	 * shown and not changed, so a tab of them has nothing to save either.
+	 *
+	 * @param FieldSet $set A tab's fields.
+	 *
+	 * @return bool
+	 */
+	private static function saves( FieldSet $set ): bool {
+		foreach ( $set->fields() as $field ) {
+			if ( $field->type()->stores_value() && ! $field->get( 'disabled' ) && ! $field->get( 'readonly' ) && ! Badge::locks( $field ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**

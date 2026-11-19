@@ -84,7 +84,7 @@ the hidden input that says which tab was submitted.
 | `option_group` | `{id}_group` | The Settings API group |
 | `constant_prefix` | `{option_name}_` | What a field's constant is named from |
 | `header_title`, `logo`, `badge` | none | The header's own title, image and badge |
-| `submit_button` | true | Draw the save button |
+| `submit_button` | true | Draw the save button (on a tab with something to save: a field that stores a value and is not read-only, disabled or locked) |
 | `export_import`, `reset_button` | false | The tools in Screen Options |
 | `help_tabs`, `help_sidebar` | none | The Help panel |
 | `appearance` | `classic` | `classic` or `modern` -- see [Appearance](#appearance) |
