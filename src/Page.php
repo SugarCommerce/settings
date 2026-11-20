@@ -167,6 +167,8 @@ final class Page {
 		add_action( 'admin_enqueue_scripts', [ $this, 'enqueue' ] );
 		add_filter( 'screen_settings', [ $this, 'render_screen_tools' ], 10, 2 );
 		add_filter( 'admin_body_class', [ $this, 'body_class' ] );
+		// admin-post, not REST: plain full-page forms -- a download, an upload
+		// and a reset -- that work with no script.
 		add_action( 'admin_post_' . $this->action_slug( 'export' ), [ $this, 'handle_export' ] );
 		add_action( 'admin_post_' . $this->action_slug( 'import' ), [ $this, 'handle_import' ] );
 		add_action( 'admin_post_' . $this->action_slug( 'reset' ), [ $this, 'handle_reset' ] );
