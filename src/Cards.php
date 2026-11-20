@@ -43,7 +43,7 @@ final class Cards {
 	 *
 	 * @var string[]
 	 */
-	private const TONES = [ 'success', 'warning', 'error', 'info', 'neutral' ];
+	private const array TONES = [ 'success', 'warning', 'error', 'info', 'neutral' ];
 
 	/**
 	 * One section, as a card.

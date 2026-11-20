@@ -484,6 +484,24 @@ final class PageTest extends TestCase {
 	}
 
 	/**
+	 * The page a refused file names is shown as text, not as markup.
+	 *
+	 * The id comes from the uploaded file, and settings_errors() prints a
+	 * message as it is: a file naming `<script>` ran it in the admin's
+	 * session on a classic page.
+	 */
+	public function test_a_refused_import_names_its_page_as_text(): void {
+		$this->page();
+
+		$this->import( [ 'id' => '<script>alert(1)</script>', 'values' => [ 'first' => 'x' ] ] );
+
+		$message = (string) $GLOBALS['sf_errors'][0]['message'];
+
+		$this->assertStringNotContainsString( '<script>', $message );
+		$this->assertStringContainsString( '&lt;script&gt;', $message );
+	}
+
+	/**
 	 * An imported value is sanitized by its own field type.
 	 */
 	public function test_imported_values_are_sanitized(): void {

@@ -312,48 +312,30 @@ exported from another page is refused. Reset restores the tab being viewed
 to its defaults. Each is a nonce'd form posting to `admin-post.php`, checked
 against the page's `capability`.
 
-## Moving from arraypress/wp-*
+## Security
 
-From `arraypress/wp-register-setting-fields` (`ArrayPress\RegisterSettingFields`).
-The global functions are gone -- a global function is the one thing Strauss
-cannot prefix -- and the registry is the page class itself. Every
-configuration key, stored value, option name, hook and CSS class keeps its
-name; text domain `arraypress` is now `sugarcommerce`.
+* Saving, importing or resetting without the right: every form checks its
+  nonce and the page's `capability`, and options.php is held to the same
+  capability rather than core's `manage_options`.
+* Writing what is not a field: a save, an import and a reset all go through
+  the page's sanitize callback, which coerces each value by its own type and
+  drops any key the page does not declare.
+* Saving another tab's fields: only the fields of the tab named in the
+  submission, and only a registered tab, are read.
+* Script in an import: a file that is not JSON is refused before it is
+  decoded, and the page a file names is shown as text.
+* Credentials in a file: an export leaves encrypted values out.
+* Redirects elsewhere: every redirect is `wp_safe_redirect()` to the page's
+  own address.
 
-| Old | New |
-|---|---|
-| `ArrayPress\RegisterSettingFields\SettingFields` | `SugarCommerce\Settings\Page` |
-| `register_setting_fields( $id, $config )`, `new SettingFields( … )` | `Page::register( $id, $config )` |
-| `get_setting_fields( $id )`, `Registry::instance()->get( $id )` | `Page::get( $id )` |
-| `Registry::instance()->has / all / unregister` | `Page::has / all / unregister` |
-| `Registry::register( $id, $page )` | internal: `Page::register()` records it |
-| `ArrayPress\RegisterSettingFields\Options` | `SugarCommerce\Settings\Options` (same arguments, same hooks) |
-| `get_setting_field_value( $id, $key, $fallback )` | `Page::options( $id )->get( $key, $fallback )` |
-| `set_setting_field_value( $id, $key, $value )`, `update_setting_field_value( … )` | `Page::options( $id )->update( $key, $value )` |
-| `delete_setting_field_value( $id, $key )` | `Page::options( $id )->delete( $key )` |
-| `get_all_setting_values( $id )` | `Page::options( $id )->all()` |
-| `is_setting_on( $id, $key )` | `Page::options( $id )->is_on( $key )` |
-| `is_setting_enabled( $id, $key, $option )` | `Page::options( $id )->includes( $key, $option )` |
-| `get_setting_field_list( $id, $key )` | `Page::options( $id )->list( $key )` |
-| `get_setting_field_ids( $id, $key )` | `Page::options( $id )->ids( $key )` |
-| `get_setting_field_page_id / _page_url / is_setting_field_page( $id, $key )` | `Page::options( $id )->page_id / page_url / is_page( $key )` |
-| `get_setting_field_license( $id, $key )` | `Page::options( $id )->license( $key )` (also reads the key-only value the `license` field stores) |
-| `get_setting_field_license_key / _status( $id, $key )` | `->license( $key )['key']`, `['status']` |
-| `is_setting_field_license_active( $id, $key )` | `->is_license_active( $key )` |
-| `update_setting_field_license_status( $id, $key, $status, $expiry )` | `->update_license_status( $key, $status, $expiry )` (no longer needs the page registered) |
-| `get_setting_fields_email( $id, $key )` | `->email( $key )` |
-| `get_setting_fields_email_recipient( $id, $key )` | `->email_recipient( $key )` |
-| `is_setting_fields_email_enabled( $id, $key )` | `->is_email_enabled( $key )` |
-| `Cards`, `Sidebar` | unchanged, under `SugarCommerce\Settings` |
-| `arraypress/wp-field-kit` | `sugarcommerce/fields` |
-| icon class `arraypress-icon` | `sugarcommerce-icon` |
-| admin-post `{id}_export`, `{id}_import`, `{id}_reset`, input `{id}_tab`, `{prefix}_get_option` and the other Options hooks, every `field-kit__settings*` class | unchanged |
-| — | `Options::int()`, `Options::string()`: a typed read that answers the fallback, not a number nobody chose |
+## Layout
 
-From the retired SaaS packages: `env`'s typed accessors, as `int()` and
-`string()`. Not carried over: its `.env` parsing -- a WordPress site's
-configuration is `wp-config.php`, whose constants a field already reads with
-`use_constant`.
+* `src/Page.php`: one settings page, slim; its jobs are traits in
+  `src/Traits/Page/` (the registered pages, the screen, saving, drawing,
+  export/import/reset, single values).
+* `src/Options.php`: the one reader and writer of a page's option, with
+  `src/Traits/Options/` (typed readers, licences, emails).
+* `src/Cards.php` and `src/Sidebar.php`: the card and side-tab appearances.
 
 ## Requirements
 

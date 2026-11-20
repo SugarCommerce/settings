@@ -18,7 +18,9 @@ use SugarCommerce\Fields\Context\EncryptedContext;
 use SugarCommerce\Fields\Contracts\Context;
 use SugarCommerce\Fields\Field;
 use SugarCommerce\Fields\Registry as Types;
-use SugarCommerce\Fields\Value;
+use SugarCommerce\Settings\Traits\Options\Readers;
+use SugarCommerce\Settings\Traits\Options\Licenses;
+use SugarCommerce\Settings\Traits\Options\Emails;
 
 /**
  * Reads and writes a settings page's option, whether or not the page exists.
@@ -56,12 +58,16 @@ use SugarCommerce\Fields\Value;
  */
 final class Options {
 
+	use Readers;
+	use Licenses;
+	use Emails;
+
 	/**
 	 * The states a licence can be in.
 	 *
 	 * @var string[]
 	 */
-	public const LICENSE_STATUSES = [ 'inactive', 'active', 'expired', 'invalid' ];
+	public const array LICENSE_STATUSES = [ 'inactive', 'active', 'expired', 'invalid' ];
 
 	/**
 	 * The option every value lives in.
@@ -322,302 +328,13 @@ final class Options {
 	 * a post's meta the same way it is drawn here.
 	 * ------------------------------------------------------------------ */
 
-	/**
-	 * Whether a toggle or a checkbox is on.
-	 *
-	 * Not a truthiness check: a toggle stores "1" and "0", and "0" is a
-	 * string PHP calls false but a form field does not always send.
-	 *
-	 * @param string $key The setting.
-	 *
-	 * @return bool
-	 */
-	public function is_on( string $key ): bool {
-		return Value::is_on( $this->get( $key, false ) );
-	}
-
-	/**
-	 * Whether a checkbox group or a multiple select has one choice ticked.
-	 *
-	 * @param string $key    The setting.
-	 * @param string $option The choice.
-	 *
-	 * @return bool
-	 */
-	public function includes( string $key, string $option ): bool {
-		return Value::includes( $this->get( $key, [] ), $option );
-	}
-
-	/**
-	 * A tags field or a multiple select as a list of strings.
-	 *
-	 * @param string $key The setting.
-	 *
-	 * @return string[]
-	 */
-	public function list( string $key ): array {
-		return Value::list( $this->get( $key, [] ) );
-	}
-
-	/**
-	 * A relational field as a list of object ids.
-	 *
-	 * @param string $key The setting.
-	 *
-	 * @return int[]
-	 */
-	public function ids( string $key ): array {
-		return Value::ids( $this->get( $key, [] ) );
-	}
-
-	/**
-	 * A whole number, or the fallback when what is stored is not one.
-	 *
-	 * "eighty" is not 0 here, and neither is "8.5": a value that is not a
-	 * whole number has not answered, so the fallback stands in for it
-	 * rather than a number nobody chose.
-	 *
-	 * @param string $key      The setting.
-	 * @param int    $fallback Returned when there is no whole number.
-	 *
-	 * @return int
-	 */
-	public function int( string $key, int $fallback = 0 ): int {
-		$value = $this->get( $key, $fallback );
-
-		if ( is_int( $value ) ) {
-			return $value;
-		}
-
-		if ( is_float( $value ) && floor( $value ) === $value && abs( $value ) <= PHP_INT_MAX ) {
-			return (int) $value;
-		}
-
-		if ( is_string( $value ) && 1 === preg_match( '/^\s*[-+]?\d+\s*$/', $value ) ) {
-			return (int) trim( $value );
-		}
-
-		return $fallback;
-	}
-
-	/**
-	 * A line of text, or the fallback when what is stored is not one.
-	 *
-	 * An array or an object is not a string, and "Array" is not what was
-	 * meant; a true or false is not one either.
-	 *
-	 * @param string $key      The setting.
-	 * @param string $fallback Returned when there is no text.
-	 *
-	 * @return string
-	 */
-	public function string( string $key, string $fallback = '' ): string {
-		$value = $this->get( $key, $fallback );
-
-		return is_scalar( $value ) && ! is_bool( $value ) ? (string) $value : $fallback;
-	}
-
-	/**
-	 * The id of the page or post a setting points at.
-	 *
-	 * @param string $key The setting.
-	 *
-	 * @return int 0 when none is set.
-	 */
-	public function page_id( string $key ): int {
-		return Value::id( $this->get( $key, 0 ) );
-	}
-
-	/**
-	 * The address of the page or post a setting points at.
-	 *
-	 * @param string $key      The setting.
-	 * @param string $fallback Returned when none is set.
-	 *
-	 * @return string The page's address, the fallback, or the home page.
-	 */
-	public function page_url( string $key, string $fallback = '' ): string {
-		return Value::url( $this->get( $key, 0 ), $fallback );
-	}
-
-	/**
-	 * Whether the request is for the page or post a setting points at.
-	 *
-	 * Compares the queried object rather than calling is_page(): a setting
-	 * can point at any post type -- the `post`, `page` and `ajax` fields all
-	 * store an id the same way -- and is_page() answers false for every one
-	 * of them that is not a page.
-	 *
-	 * @param string $key The setting.
-	 *
-	 * @return bool
-	 */
-	public function is_page( string $key ): bool {
-		return Value::is_viewing( $this->get( $key, 0 ) );
-	}
-
 	/* ---------------------------------------------------------------------
 	 * A licence field
 	 * ------------------------------------------------------------------ */
 
-	/**
-	 * A `license` field's key, status and expiry.
-	 *
-	 * @param string $key The setting.
-	 *
-	 * @return array{key: string, status: string, expiry: string}
-	 */
-	public function license( string $key ): array {
-		$value = $this->get( $key, [] );
-
-		// The field itself stores the key alone; the status and expiry are
-		// what a licence check wrote beside it.
-		$value = is_array( $value ) ? $value : [ 'key' => is_scalar( $value ) ? (string) $value : '' ];
-
-		return [
-			'key'    => (string) ( $value['key'] ?? '' ),
-			'status' => (string) ( $value['status'] ?? 'inactive' ),
-			'expiry' => (string) ( $value['expiry'] ?? '' ),
-		] + $value;
-	}
-
-	/**
-	 * Whether a licence is active.
-	 *
-	 * @param string $key The setting.
-	 *
-	 * @return bool
-	 */
-	public function is_license_active( string $key ): bool {
-		return 'active' === $this->license( $key )['status'];
-	}
-
-	/**
-	 * Change a licence's status, and its expiry if one is given.
-	 *
-	 * For a cron job, a webhook or a remote check that learns the licence has
-	 * changed without anybody opening the settings page. The key is kept.
-	 *
-	 * @param string $key    The setting.
-	 * @param string $status inactive, active, expired or invalid.
-	 * @param string $expiry A new expiry, or empty to keep the one stored.
-	 *
-	 * @return bool False for a status that is not one of the four.
-	 */
-	public function update_license_status( string $key, string $status, string $expiry = '' ): bool {
-		if ( ! in_array( $status, self::LICENSE_STATUSES, true ) ) {
-			return false;
-		}
-
-		$license = $this->license( $key );
-
-		$license['status'] = $status;
-
-		if ( '' !== $expiry ) {
-			$license['expiry'] = sanitize_text_field( $expiry );
-		}
-
-		return $this->update( $key, $license );
-	}
-
 	/* ---------------------------------------------------------------------
 	 * An email_editor field
 	 * ------------------------------------------------------------------ */
-
-	/**
-	 * What the site owner typed into an `email_editor` field, in the shape
-	 * sugarcommerce/emails reads.
-	 *
-	 * The field stores `recipient`, `subject`, `heading` and `body`, and an
-	 * `enabled` toggle if it was given one. `Emails::add()`'s `settings`
-	 * callable is read for `enabled`, `to`, `subject`, `content` and
-	 * `context`. This is the seam between the two:
-	 *
-	 *     Emails::add( 'my_plugin', 'purchase_receipt', [
-	 *         'settings' => fn() => my_plugin_options()->email( 'email_purchase_receipt' ),
-	 *     ] );
-	 *
-	 * A part the owner left empty is left out, so the email's registered
-	 * default stands in for it.
-	 *
-	 * @param string $key The setting.
-	 *
-	 * @return array{enabled?: bool, to?: string[], subject?: string, content?: string, context?: array{title: string}}
-	 */
-	public function email( string $key ): array {
-		$value = $this->get( $key );
-
-		if ( empty( $value ) || ! is_array( $value ) ) {
-			return [];
-		}
-
-		$result = [];
-
-		if ( isset( $value['enabled'] ) ) {
-			$result['enabled'] = (bool) $value['enabled'];
-		}
-
-		// Several addresses, separated by commas -- which is what the field
-		// says beside its recipient box.
-		$to = array_filter( array_map( 'sanitize_email', explode( ',', (string) ( $value['recipient'] ?? '' ) ) ) );
-
-		if ( [] !== $to ) {
-			$result['to'] = array_values( $to );
-		}
-
-		if ( ! empty( $value['subject'] ) ) {
-			$result['subject'] = (string) $value['subject'];
-		}
-
-		// The editor stores the body without its <p> tags, as wp_editor
-		// does; wpautop() puts them back.
-		if ( ! empty( $value['body'] ) ) {
-			$result['content'] = wpautop( (string) $value['body'] );
-		}
-
-		// The heading is the template's title, which sits above the body.
-		if ( ! empty( $value['heading'] ) ) {
-			$result['context'] = [ 'title' => (string) $value['heading'] ];
-		}
-
-		return $result;
-	}
-
-	/**
-	 * Who an `email_editor` field's email goes to, or the site's admin.
-	 *
-	 * @param string $key The setting.
-	 *
-	 * @return string
-	 */
-	public function email_recipient( string $key ): string {
-		$value = $this->get( $key );
-
-		if ( is_array( $value ) && ! empty( $value['recipient'] ) && is_email( $value['recipient'] ) ) {
-			return (string) $value['recipient'];
-		}
-
-		return (string) get_option( 'admin_email', '' );
-	}
-
-	/**
-	 * Whether an `email_editor` field's email is on.
-	 *
-	 * On when nothing is stored: an email nobody has turned off is sent.
-	 *
-	 * @param string $key The setting.
-	 *
-	 * @return bool
-	 */
-	public function is_email_enabled( string $key ): bool {
-		$value = $this->get( $key );
-
-		if ( is_array( $value ) && isset( $value['enabled'] ) ) {
-			return (bool) $value['enabled'];
-		}
-
-		return true;
-	}
 
 	/**
 	 * Read one value with no page to ask.
