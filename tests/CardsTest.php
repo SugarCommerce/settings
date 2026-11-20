@@ -177,12 +177,21 @@ final class CardsTest extends TestCase {
 	}
 
 	/**
+	 * The page's save bar and sidebar are written by hand, and the field kit
+	 * drives only markup stamped for its build: the wrapper carries the
+	 * stamp, as cards and as the classic table alike.
+	 */
+	public function test_the_page_is_stamped_for_the_field_kit(): void {
+		$this->assertStringContainsString( '<div class="wrap field-kit__settings" data-field-kit-build="sugarcommerce-fields">', $this->render( $this->page( [ 'appearance' => 'classic' ] ) ) );
+	}
+
+	/**
 	 * Each section is a card with its title, its line and its fields.
 	 */
 	public function test_a_section_is_a_card(): void {
 		$html = $this->render( $this->page() );
 
-		$this->assertStringContainsString( 'class="wrap field-kit__settings field-kit__settings--modern"', $html );
+		$this->assertStringContainsString( 'class="wrap field-kit__settings field-kit__settings--modern" data-field-kit-build="sugarcommerce-fields">', $html );
 		$this->assertStringContainsString( '<section class="field-kit__settings-card" id="sf_demo-section-shop">', $html );
 		$this->assertStringContainsString( '<h2 class="field-kit__settings-card-title">Shop', $html );
 		$this->assertStringContainsString( '<div class="field-kit__settings-card-description">What buyers see.</div>', $html );

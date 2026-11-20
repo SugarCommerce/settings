@@ -19,6 +19,7 @@ use SugarCommerce\Fields\Support\Markup;
 use SugarCommerce\Fields\Support\PageHeader;
 use SugarCommerce\Fields\Support\Sections;
 use SugarCommerce\Fields\Support\Tooltip;
+use SugarCommerce\Fields\Utils\Runtime as FieldsRuntime;
 use SugarCommerce\Settings\Cards;
 use SugarCommerce\Settings\Sidebar;
 
@@ -67,7 +68,10 @@ trait Rendering {
 
 		$modern = $this->is_modern();
 
-		printf( '<div class="wrap field-kit__settings%s">', $modern ? ' field-kit__settings--modern' : '' );
+		// Stamped for the field kit's build that draws this page: its save
+		// bar and sidebar are written here, by hand, and a copy of the kit
+		// drives only markup stamped for it.
+		printf( '<div class="wrap field-kit__settings%s"%s>', $modern ? ' field-kit__settings--modern' : '', FieldsRuntime::stamp() ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- stamp() escapes.
 
 		// As cards, a clean save is acknowledged beside the button that was
 		// pressed, so the notices are printed without core's "Settings
@@ -108,7 +112,7 @@ trait Rendering {
 	private function render_sidebar_page( string $tab ): void {
 		$title = (string) ( '' !== (string) $this->config['header_title'] ? $this->config['header_title'] : $this->config['page_title'] );
 
-		echo '<div class="wrap field-kit__settings field-kit__settings--modern field-kit__settings--sidebar">';
+		echo '<div class="wrap field-kit__settings field-kit__settings--modern field-kit__settings--sidebar"' . FieldsRuntime::stamp() . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- stamp() escapes.
 
 		// The first tab is the page's front and is not named after the title.
 		echo Sidebar::title( $title, array_key_first( $this->tabs ) === $tab ? '' : (string) ( $this->tabs[ $tab ]['label'] ?? '' ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped as it is built.

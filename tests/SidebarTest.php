@@ -153,7 +153,7 @@ final class SidebarTest extends TestCase {
 		$html = $this->render( $this->page() );
 
 		$this->assertStringNotContainsString( 'privacy-settings-header', $html );
-		$this->assertStringStartsWith( '<div class="wrap field-kit__settings field-kit__settings--modern field-kit__settings--sidebar">', $html );
+		$this->assertStringStartsWith( '<div class="wrap field-kit__settings field-kit__settings--modern field-kit__settings--sidebar" data-field-kit-build="sugarcommerce-fields">', $html );
 		$this->assertStringContainsString( '<h1 class="wp-heading-inline field-kit__settings-title">Settings</h1><hr class="wp-header-end">', $html );
 
 		// Then the tabs, then the form, side by side in the shell.
