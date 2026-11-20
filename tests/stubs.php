@@ -43,6 +43,23 @@ function sf_reset_globals(): void {
 
 sf_reset_globals();
 
+if ( ! function_exists( 'get_current_user_id' ) ) {
+	function get_current_user_id() {
+		return $GLOBALS['sf_user'] ?? 1;
+	}
+}
+
+/**
+ * What notices' flash() left for the current user on a page.
+ *
+ * @param string $option_name The page's option, its notice context.
+ *
+ * @return array<int, array{message: string, type: string}>
+ */
+function sf_flashed( string $option_name = 'sf_demo' ): array {
+	return (array) ( $GLOBALS['sf_transients'][ $option_name . '_notice_flash_' . get_current_user_id() ] ?? [] );
+}
+
 if ( ! function_exists( 'add_filter' ) ) {
 	function add_filter( $hook, $callback, $priority = 10, $accepted_args = 1 ) {
 		$GLOBALS['fk_filters'][ $hook ][] = $callback;

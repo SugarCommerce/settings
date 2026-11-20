@@ -480,22 +480,27 @@ final class PageTest extends TestCase {
 		$this->import( [ 'id' => 'somewhere_else', 'values' => [ 'first' => 'overwritten' ] ] );
 
 		$this->assertSame( 'original', $page->get_value( 'first' ) );
-		$this->assertSame( 'import_failed', $GLOBALS['sf_errors'][0]['code'] );
+		$this->assertSame( 'error', sf_flashed()[0]['type'] );
+		$this->assertStringContainsString( 'somewhere_else', sf_flashed()[0]['message'] );
+
+		// For the user who did it, not core's site-wide settings_errors.
+		$this->assertArrayNotHasKey( 'settings_errors', $GLOBALS['sf_transients'] );
+		$this->assertSame( [], $GLOBALS['sf_errors'] );
 	}
 
 	/**
 	 * The page a refused file names is shown as text, not as markup.
 	 *
-	 * The id comes from the uploaded file, and settings_errors() prints a
-	 * message as it is: a file naming `<script>` ran it in the admin's
-	 * session on a classic page.
+	 * The id comes from the uploaded file: a file naming `<script>` ran it
+	 * in the admin's session on a classic page when settings_errors()
+	 * printed it.
 	 */
 	public function test_a_refused_import_names_its_page_as_text(): void {
 		$this->page();
 
 		$this->import( [ 'id' => '<script>alert(1)</script>', 'values' => [ 'first' => 'x' ] ] );
 
-		$message = (string) $GLOBALS['sf_errors'][0]['message'];
+		$message = (string) sf_flashed()[0]['message'];
 
 		$this->assertStringNotContainsString( '<script>', $message );
 		$this->assertStringContainsString( '&lt;script&gt;', $message );
@@ -522,6 +527,18 @@ final class PageTest extends TestCase {
 	}
 
 	/**
+	 * The page listens for what its import and reset flashed, so the screen
+	 * the redirect lands on prints it.
+	 */
+	public function test_the_page_shows_what_its_tools_flashed(): void {
+		( new \ReflectionProperty( \SugarCommerce\Notices\Notices::class, 'hooked' ) )->setValue( null, [] );
+
+		$this->page();
+
+		$this->assertNotEmpty( $GLOBALS['fk_actions']['admin_notices'] ?? [] );
+	}
+
+	/**
 	 * A reset clears the tab it was asked for and no other.
 	 */
 	public function test_a_reset_clears_only_the_tab_it_was_asked_for(): void {
@@ -537,7 +554,10 @@ final class PageTest extends TestCase {
 			$this->fail( 'handle_reset() should have redirected.' );
 		} catch ( SF_Redirect $redirect ) {
 			$this->assertStringContainsString( 'tab=one', $redirect->location );
+			$this->assertStringNotContainsString( 'settings-updated', $redirect->location, 'Nothing waits in settings_errors to be read.' );
 		}
+
+		$this->assertSame( [ [ 'message' => 'Settings reset.', 'type' => 'success' ] ], sf_flashed() );
 
 		$this->assertNull( $page->get_value( 'first' ) );
 		$this->assertSame( 'kept', $page->get_value( 'second' ) );

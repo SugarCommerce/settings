@@ -310,7 +310,10 @@ file back through the same sanitise callback as the form, so every value is
 coerced by its field and anything that is not a field is ignored; a file
 exported from another page is refused. Reset restores the tab being viewed
 to its defaults. Each is a nonce'd form posting to `admin-post.php`, checked
-against the page's `capability`.
+against the page's `capability`. What it says afterwards ("Settings
+imported.") is flashed through [sugarcommerce/notices](https://github.com/SugarCommerce/notices)
+under the page's `option_name`: kept for the user who did it, shown once on
+the screen the redirect lands on.
 
 ## Security
 
@@ -325,6 +328,8 @@ against the page's `capability`.
 * Script in an import: a file that is not JSON is refused before it is
   decoded, and the page a file names is shown as text.
 * Credentials in a file: an export leaves encrypted values out.
+* Another admin's message: what an import or reset says waits for the user
+  who did it (notices' flash), not in core's site-wide `settings_errors`.
 * Redirects elsewhere: every redirect is `wp_safe_redirect()` to the page's
   own address.
 
@@ -341,6 +346,7 @@ against the page's `capability`.
 
 * PHP 8.3 or later
 * WordPress 7.1 or later
+* `sugarcommerce/fields` and `sugarcommerce/notices`
 
 ## License
 

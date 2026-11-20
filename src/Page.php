@@ -19,6 +19,7 @@ use SugarCommerce\Fields\Contracts\Context;
 use SugarCommerce\Fields\Field;
 use SugarCommerce\Fields\FieldSet;
 use SugarCommerce\Fields\Support\Badge;
+use SugarCommerce\Notices\Notices;
 use SugarCommerce\Settings\Traits\Page\Instances;
 use SugarCommerce\Settings\Traits\Page\Screen;
 use SugarCommerce\Settings\Traits\Page\Saving;
@@ -172,6 +173,9 @@ final class Page {
 		add_action( 'admin_post_' . $this->action_slug( 'export' ), [ $this, 'handle_export' ] );
 		add_action( 'admin_post_' . $this->action_slug( 'import' ), [ $this, 'handle_import' ] );
 		add_action( 'admin_post_' . $this->action_slug( 'reset' ), [ $this, 'handle_reset' ] );
+
+		// What an import or a reset said, on the screen it redirects back to.
+		Notices::listen( (string) $this->config['option_name'] );
 	}
 
 	/**

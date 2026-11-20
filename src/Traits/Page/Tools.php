@@ -12,6 +12,8 @@ declare( strict_types=1 );
 
 namespace SugarCommerce\Settings\Traits\Page;
 
+use SugarCommerce\Notices\Notices;
+
 /**
  * Export, import and reset: the screen's tools and the requests they send.
  *
@@ -242,7 +244,7 @@ trait Tools {
 		// is_uploaded_file() as well as the error code: it is what makes the
 		// path PHP wrote the only one that can be read here.
 		if ( UPLOAD_ERR_OK !== (int) ( $file['error'] ?? UPLOAD_ERR_NO_FILE ) || ! is_uploaded_file( (string) ( $file['tmp_name'] ?? '' ) ) ) {
-			$this->redirect_with_notice( 'import_failed', __( 'No file was uploaded.', 'sugarcommerce' ), 'error' );
+			$this->redirect_with_notice( __( 'No file was uploaded.', 'sugarcommerce' ), 'error' );
 		}
 
 		$json = (string) file_get_contents( (string) $file['tmp_name'] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local upload, not a remote request.
@@ -266,17 +268,16 @@ trait Tools {
 	 */
 	public function apply_import( mixed $decoded ): void {
 		if ( ! is_array( $decoded ) || ! isset( $decoded['values'] ) || ! is_array( $decoded['values'] ) ) {
-			$this->redirect_with_notice( 'import_failed', __( 'That file is not a settings export.', 'sugarcommerce' ), 'error' );
+			$this->redirect_with_notice( __( 'That file is not a settings export.', 'sugarcommerce' ), 'error' );
 		}
 
 		if ( (string) ( $decoded['id'] ?? '' ) !== $this->id ) {
 			$this->redirect_with_notice(
-				'import_failed',
 				sprintf(
 					/* translators: 1: the page the file was exported from, 2: this page */
 					__( 'That file is for "%1$s", not "%2$s".', 'sugarcommerce' ),
-					// From the file, and settings_errors() prints a message
-					// as it is: text here, or a file naming a script runs it.
+					// From the file: text here, or a file naming a script
+					// would put its markup on the page.
 					esc_html( (string) ( $decoded['id'] ?? '' ) ),
 					esc_html( $this->id )
 				),
@@ -290,7 +291,7 @@ trait Tools {
 		// there rather than becoming part of the option.
 		update_option( (string) $this->config['option_name'], $decoded['values'] );
 
-		$this->redirect_with_notice( 'imported', __( 'Settings imported.', 'sugarcommerce' ), 'success' );
+		$this->redirect_with_notice( __( 'Settings imported.', 'sugarcommerce' ), 'success' );
 	}
 
 	/**
@@ -317,7 +318,7 @@ trait Tools {
 		// value is not encrypted again.
 		update_option( (string) $this->config['option_name'], $values );
 
-		$this->redirect_with_notice( 'reset', __( 'Settings reset.', 'sugarcommerce' ), 'success' );
+		$this->redirect_with_notice( __( 'Settings reset.', 'sugarcommerce' ), 'success' );
 	}
 
 	/**
@@ -336,31 +337,27 @@ trait Tools {
 	}
 
 	/**
-	 * Record a notice and go back to the settings page.
+	 * Leave a message for this user and go back to the settings page.
 	 *
-	 * @param string $code    Notice code.
+	 * Through sugarcommerce/notices' flash(): kept for the user who did it,
+	 * a minute at most, and shown once on the screen the redirect lands on
+	 * -- not core's site-wide `settings_errors` transient, which any admin
+	 * loading a settings page in the next thirty seconds would read.
+	 *
 	 * @param string $message Notice message.
 	 * @param string $type    Notice type.
 	 *
 	 * @return void
 	 */
-	private function redirect_with_notice( string $code, string $message, string $type ): void {
-		add_settings_error( (string) $this->config['option_name'], $code, $message, $type );
-
-		// Where get_settings_errors() looks after a redirect, and the reason
-		// the URL below carries settings-updated: without it the transient is
-		// never read and the notice is silently dropped.
-		set_transient( 'settings_errors', get_settings_errors(), 30 );
+	private function redirect_with_notice( string $message, string $type ): void {
+		Notices::flash( (string) $this->config['option_name'], $message, $type );
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified in authorize().
 		$tab = isset( $_POST['tab'] ) ? sanitize_key( wp_unslash( $_POST['tab'] ) ) : '';
 
 		wp_safe_redirect(
 			$this->page_url(
-				[
-					'tab'              => $tab,
-					'settings-updated' => 'true',
-				]
+				[ 'tab' => $tab ]
 			)
 		);
 

@@ -12,7 +12,8 @@
   ],
   "require": {
     "php": ">=8.3",
-    "sugarcommerce/fields": "dev-main"
+    "sugarcommerce/fields": "dev-main",
+    "sugarcommerce/notices": "dev-main"
   },
   "require-dev": {
     "phpcompatibility/phpcompatibility-wp": "^2.1",
@@ -24,6 +25,13 @@
     "sugarcommerce/emails": "Sends the emails an email_editor field edits: Options::email() is the shape its settings callable reads."
   },
   "repositories": [
+    {
+      "type": "path",
+      "url": "../notices",
+      "options": {
+        "symlink": false
+      }
+    },
     {
       "type": "path",
       "url": "../fields",
